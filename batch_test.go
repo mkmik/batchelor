@@ -39,16 +39,13 @@ func TestBatch(t *testing.T) {
 	newJob := func() batchelor.Batch { mu.Lock(); defer mu.Unlock(); n++; return &heavyLifting{id: n} }
 	q := batchelor.NewQueue(newJob)
 
-	var wg sync.WaitGroup
-	for i := 1; i <= 3; i++ {
-		i := i
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := q.Do(func() error { log.Printf("do %d", i); return nil }); err != nil {
-				t.Fatal(err)
-			}
-		}()
+	errChs := make([]<-chan error, 3)
+	for i := 0; i < len(errChs); i++ {
+		errChs[i] = q.DoChan(func() error { log.Printf("do %d", i); return nil })
 	}
-	wg.Wait()
+	for _, errCh := range errChs {
+		if err := <-errCh; err != nil {
+			t.Error(err)
+		}
+	}
 }
