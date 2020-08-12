@@ -37,6 +37,7 @@ func (q *Queue) Do(op func() error) error {
 // DoChan executes an operation. Once the operation executes, the return value will be sent to the returned channel.
 func (q *Queue) DoChan(op func() error) <-chan error {
 	q.mu.Lock()
+	defer q.mu.Unlock()
 
 	if q.in == nil {
 		q.in = newJob(q.newBatch())
@@ -54,6 +55,7 @@ func (q *Queue) DoChan(op func() error) <-chan error {
 	return ch
 }
 
+// to be called while the mutex is held
 func (q *Queue) try() {
 	if q.in != nil && q.out == nil {
 		q.in, q.out = nil, q.in
@@ -61,11 +63,11 @@ func (q *Queue) try() {
 			b.commit()
 
 			q.mu.Lock()
+			defer q.mu.Unlock()
 			q.out = nil
 			q.try()
 		}(q.out)
 	}
-	q.mu.Unlock()
 }
 
 type job struct {
