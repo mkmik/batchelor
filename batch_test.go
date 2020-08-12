@@ -99,6 +99,8 @@ func TestError(t *testing.T) {
 
 	for i, errCh := range errChs {
 		err := <-errCh
+		// operation 2 runs in the second batch, along with operations 1 and 3, which
+		// all fail since the whole batch fails because of operation 2.
 		if i == 0 && err != nil {
 			t.Error(err)
 		} else if i > 0 {
