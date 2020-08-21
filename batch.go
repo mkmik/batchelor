@@ -6,10 +6,12 @@ package batchelor
 
 import "sync"
 
+type WorkFn func(interface{}) error
+
 // A Batch is a generic unit of work composed of a number of operations that will be executed
 // together.
 type Batch interface {
-	Process(ops []func() error) error
+	Process(ops []WorkFn) error
 }
 
 // A Queue executes operations in batches. While a batch is executing, all new incoming
@@ -30,12 +32,12 @@ func NewQueue(newBatch func() Batch) *Queue {
 
 // Do executes an operation.
 // The call blocks until the operation has been actually executed.
-func (q *Queue) Do(op func() error) error {
+func (q *Queue) Do(op WorkFn) error {
 	return <-q.DoChan(op)
 }
 
 // DoChan executes an operation. Once the operation executes, the return value will be sent to the returned channel.
-func (q *Queue) DoChan(op func() error) <-chan error {
+func (q *Queue) DoChan(op WorkFn) <-chan error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -72,7 +74,7 @@ func (q *Queue) try() {
 
 type job struct {
 	batch Batch
-	ops   []func() error
+	ops   []WorkFn
 	err   error
 	done  chan struct{}
 }
@@ -84,7 +86,7 @@ func newJob(batch Batch) *job {
 	}
 }
 
-func (b *job) add(op func() error) <-chan struct{} {
+func (b *job) add(op WorkFn) <-chan struct{} {
 	b.ops = append(b.ops, op)
 	return b.done
 }

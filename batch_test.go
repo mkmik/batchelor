@@ -16,11 +16,11 @@ type heavyLifting struct {
 	id int
 }
 
-func (h *heavyLifting) Process(ops []func() error) error {
+func (h *heavyLifting) Process(ops []batchelor.WorkFn) error {
 	log.Printf("preparing %d", h.id)
 
 	for _, o := range ops {
-		if err := o(); err != nil {
+		if err := o(h.id); err != nil {
 			return err
 		}
 	}
@@ -47,11 +47,16 @@ func TestBatch(t *testing.T) {
 		errChs := make([]<-chan error, 4)
 		for i := 0; i < len(errChs); i++ {
 			i := i
-			errChs[i] = q.DoChan(func() error {
+			errChs[i] = q.DoChan(func(c interface{}) error {
+				batchId, ok := c.(int)
+				if !ok {
+					return fmt.Errorf("wrong payload type %T", c)
+				}
+
 				mu.Lock()
 				defer mu.Unlock()
 				<-w
-				log.Printf("do %d", i)
+				log.Printf("do %d:%d", batchId, i)
 				return nil
 			})
 		}
@@ -83,13 +88,18 @@ func TestError(t *testing.T) {
 	errChs := make([]<-chan error, 4)
 	for i := 0; i < len(errChs); i++ {
 		i := i
-		errChs[i] = q.DoChan(func() error {
+		errChs[i] = q.DoChan(func(c interface{}) error {
+			batchId, ok := c.(int)
+			if !ok {
+				return fmt.Errorf("wrong payload type %T", c)
+			}
+
 			mu.Lock()
 			defer mu.Unlock()
 			<-w
-			log.Printf("do %d", i)
+			log.Printf("do %d:%d", batchId, i)
 			if i == 2 {
-				return fmt.Errorf("test error %d", i)
+				return fmt.Errorf("test error %d:%d", batchId, i)
 			}
 			return nil
 		})
@@ -104,7 +114,7 @@ func TestError(t *testing.T) {
 		if i == 0 && err != nil {
 			t.Error(err)
 		} else if i > 0 {
-			if got, want := err.Error(), "test error 2"; got != want {
+			if got, want := err.Error(), "test error 2:2"; got != want {
 				t.Errorf("expecting %q got %q", want, err)
 			}
 		}
