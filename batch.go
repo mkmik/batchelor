@@ -9,6 +9,7 @@ import "sync"
 // A Batch is a generic unit of work composed of a number of operations that will be executed
 // together.
 type Batch interface {
+	Prepare() error
 	Process(ops []func() error) error
 }
 
@@ -90,6 +91,11 @@ func (b *job) add(op func() error) <-chan struct{} {
 }
 
 func (b *job) commit() {
+	defer close(b.done)
+
+	if err := b.batch.Prepare(); err != nil {
+		b.err = err
+		return
+	}
 	b.err = b.batch.Process(b.ops)
-	close(b.done)
 }

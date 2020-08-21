@@ -16,9 +16,12 @@ type heavyLifting struct {
 	id int
 }
 
-func (h *heavyLifting) Process(ops []func() error) error {
+func (h *heavyLifting) Prepare() error {
 	log.Printf("preparing %d", h.id)
+	return nil
+}
 
+func (h *heavyLifting) Process(ops []func() error) error {
 	for _, o := range ops {
 		if err := o(); err != nil {
 			return err
