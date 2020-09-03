@@ -4,7 +4,9 @@
 // Package batchelor implements a generic batching executor. The API is loosely modeled golang.org/x/sync/singleflight.
 package batchelor
 
-import "sync"
+import (
+	"sync"
+)
 
 // A Batch is a generic unit of work composed of a number of operations that will be executed
 // together.
@@ -41,7 +43,14 @@ func (q *Queue) DoChan(op func() error) <-chan error {
 	defer q.mu.Unlock()
 
 	if q.in == nil {
-		q.in = newJob(q.newBatch())
+		in, previous := newJob(q.newBatch()), q.out
+		go func() {
+			if previous != nil {
+				<-previous.done
+			}
+			in.prepare()
+		}()
+		q.in = in
 	}
 	b := q.in
 
@@ -52,6 +61,7 @@ func (q *Queue) DoChan(op func() error) <-chan error {
 	go func() {
 		<-done
 		ch <- b.err
+		close(ch)
 	}()
 	return ch
 }
@@ -59,8 +69,15 @@ func (q *Queue) DoChan(op func() error) <-chan error {
 // to be called while the mutex is held
 func (q *Queue) try() {
 	if q.in != nil && q.out == nil {
-		q.in, q.out = nil, q.in
+		q.out = q.in
 		go func(b *job) {
+			<-b.prepared
+
+			// Stop accepting ops for this queue
+			q.mu.Lock()
+			q.in = nil
+			q.mu.Unlock()
+
 			b.commit()
 
 			q.mu.Lock()
@@ -72,16 +89,18 @@ func (q *Queue) try() {
 }
 
 type job struct {
-	batch Batch
-	ops   []func() error
-	err   error
-	done  chan struct{}
+	batch    Batch
+	ops      []func() error
+	err      error
+	prepared chan struct{}
+	done     chan struct{}
 }
 
 func newJob(batch Batch) *job {
 	return &job{
-		batch: batch,
-		done:  make(chan struct{}),
+		batch:    batch,
+		prepared: make(chan struct{}),
+		done:     make(chan struct{}),
 	}
 }
 
@@ -90,12 +109,14 @@ func (b *job) add(op func() error) <-chan struct{} {
 	return b.done
 }
 
-func (b *job) commit() {
-	defer close(b.done)
+func (b *job) prepare() {
+	b.err = b.batch.Prepare()
+	close(b.prepared)
+}
 
-	if err := b.batch.Prepare(); err != nil {
-		b.err = err
-		return
+func (b *job) commit() {
+	if b.err == nil {
+		b.err = b.batch.Process(b.ops)
 	}
-	b.err = b.batch.Process(b.ops)
+	close(b.done)
 }

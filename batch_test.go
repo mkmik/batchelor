@@ -6,7 +6,6 @@ package batchelor_test
 import (
 	"fmt"
 	"log"
-	"sync"
 	"testing"
 
 	"github.com/mkmik/batchelor"
@@ -14,9 +13,12 @@ import (
 
 type heavyLifting struct {
 	id int
+	// waiter signals the Prepare function that it can proceed
+	waiter <-chan struct{}
 }
 
 func (h *heavyLifting) Prepare() error {
+	<-h.waiter
 	log.Printf("preparing %d", h.id)
 	return nil
 }
@@ -34,32 +36,27 @@ func (h *heavyLifting) Process(ops []func() error) error {
 
 func TestBatch(t *testing.T) {
 	n := 0
-	var mu sync.Mutex
-	newJob := func() batchelor.Batch {
-		mu.Lock()
-		defer mu.Unlock()
 
+	w := make(chan struct{})
+	defer close(w)
+
+	newJob := func() batchelor.Batch {
 		n++
-		return &heavyLifting{id: n}
+		return &heavyLifting{id: n, waiter: w}
 	}
 	q := batchelor.NewQueue(newJob)
 
 	for j := 0; j < 2; j++ {
-		w := make(chan struct{})
-
 		errChs := make([]<-chan error, 4)
 		for i := 0; i < len(errChs); i++ {
 			i := i
 			errChs[i] = q.DoChan(func() error {
-				mu.Lock()
-				defer mu.Unlock()
-				<-w
 				log.Printf("do %d", i)
 				return nil
 			})
 		}
 
-		close(w)
+		w <- struct{}{}
 
 		for _, errCh := range errChs {
 			if err := <-errCh; err != nil {
@@ -71,25 +68,20 @@ func TestBatch(t *testing.T) {
 
 func TestError(t *testing.T) {
 	n := 0
-	var mu sync.Mutex
-	newJob := func() batchelor.Batch {
-		mu.Lock()
-		defer mu.Unlock()
-
-		n++
-		return &heavyLifting{id: n}
-	}
-	q := batchelor.NewQueue(newJob)
 
 	w := make(chan struct{})
+	defer close(w)
+
+	newJob := func() batchelor.Batch {
+		n++
+		return &heavyLifting{id: n, waiter: w}
+	}
+	q := batchelor.NewQueue(newJob)
 
 	errChs := make([]<-chan error, 4)
 	for i := 0; i < len(errChs); i++ {
 		i := i
 		errChs[i] = q.DoChan(func() error {
-			mu.Lock()
-			defer mu.Unlock()
-			<-w
 			log.Printf("do %d", i)
 			if i == 2 {
 				return fmt.Errorf("test error %d", i)
@@ -98,18 +90,51 @@ func TestError(t *testing.T) {
 		})
 	}
 
-	close(w)
+	w <- struct{}{}
 
-	for i, errCh := range errChs {
+	for _, errCh := range errChs {
 		err := <-errCh
-		// operation 2 runs in the second batch, along with operations 1 and 3, which
-		// all fail since the whole batch fails because of operation 2.
-		if i == 0 && err != nil {
-			t.Error(err)
-		} else if i > 0 {
-			if got, want := err.Error(), "test error 2"; got != want {
-				t.Errorf("expecting %q got %q", want, err)
+		if got, want := err.Error(), "test error 2"; got != want {
+			t.Errorf("expecting %q got %q", want, err)
+		}
+	}
+}
+
+// TestFirstBatch ensures the initial batch accepts multiple items
+func TestFirstBatch(t *testing.T) {
+	n := 0
+
+	w := make(chan struct{})
+	defer close(w)
+
+	newJob := func() batchelor.Batch {
+		n++
+		return &heavyLifting{id: n, waiter: w}
+	}
+	q := batchelor.NewQueue(newJob)
+
+	for j := 1; j < 4; j++ {
+		opsPerBatch := j * 2
+		var processed int
+		errChs := make([]<-chan error, opsPerBatch)
+		for i := 0; i < len(errChs); i++ {
+			i := i
+			errChs[i] = q.DoChan(func() error {
+				processed++
+				log.Printf("do %d", i)
+				return nil
+			})
+		}
+
+		w <- struct{}{}
+
+		for _, errCh := range errChs {
+			if err := <-errCh; err != nil {
+				t.Error(err)
 			}
+		}
+		if got, want := processed, opsPerBatch; got != want {
+			t.Errorf("expecting %d, got %d", want, got)
 		}
 	}
 }
